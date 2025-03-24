@@ -6,7 +6,6 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Conversation } from "@11labs/client";
 import { cn } from "@/lib/utils";
-import { v4 as uuidv4 } from "uuid";
 
 async function requestMicrophonePermission() {
   try {
@@ -32,7 +31,6 @@ export function ConvAI() {
   const [isConnected, setIsConnected] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [micMuted, setMicMuted] = useState(true);
-  const [chatId, setChatId] = useState(uuidv4());
 
   async function switchSpeak() {
     setMicMuted(!micMuted);
