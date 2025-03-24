@@ -37,7 +37,6 @@ export function ConvAI() {
   async function switchSpeak() {
     setMicMuted(!micMuted);
     conversation?.setMicMuted(!micMuted);
-    // setConversation(conversation)
     return;
   }
 
@@ -50,12 +49,9 @@ export function ConvAI() {
     const signedUrl = await getSignedUrl();
     const conversation = await Conversation.startSession({
       signedUrl: signedUrl,
-      //   customLlmExtraBody: {
-      //     extraBody: {
-      //       chatId: "b4f598dc-40ae-4674-895e-84378b040000",
-      //       userId: chatId,
-      //     },
-      //   },
+      // customLlmExtraBody: {
+      //   chatId: "b4f598dc-40ae-4674-895e-84378b040000",
+      // },
       onConnect: () => {
         setIsConnected(true);
         setIsSpeaking(micMuted);
@@ -63,7 +59,7 @@ export function ConvAI() {
       onDisconnect: () => {
         setIsConnected(false);
         setIsSpeaking(false);
-        setMicMuted(true)
+        setMicMuted(true);
       },
       onError: (error) => {
         console.log(error);
