@@ -8,8 +8,12 @@ import { ElevenLabsClient } from "elevenlabs";
 import { cn } from "@/lib/utils";
 import { v4 as uuidv4 } from "uuid";
 
+// Access environment variables with NEXT_PUBLIC_ prefix
+const XI_API_KEY = process.env.NEXT_PUBLIC_XI_API_KEY || "";
+const AGENT_ID = process.env.NEXT_PUBLIC_AGENT_ID || "";
+
 const client = new ElevenLabsClient({
-  apiKey: "sk_4e7026128a2ef3d7719fdc1168e77718c6120e66189a5573",
+  apiKey: XI_API_KEY,
 });
 
 export function ConvAI() {
@@ -196,11 +200,11 @@ export function ConvAI() {
 
       // ElevenLabs Streaming API Call
       const ttsResponse = await fetch(
-        `https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream`,
+        `https://api.elevenlabs.io/v1/text-to-speech/` + AGENT_ID + `/stream`,
         {
           method: "POST",
           headers: {
-            "xi-api-key": "sk_4e7026128a2ef3d7719fdc1168e77718c6120e66189a5573",
+            "xi-api-key": XI_API_KEY,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
@@ -248,26 +252,38 @@ export function ConvAI() {
 
       mediaSourceRef.current.addEventListener("sourceopen", async () => {
         try {
+          // Set duration only after MediaSource is open
+          mediaSourceRef.current!.duration = 100;
+
           const sourceBuffer = mediaSourceRef.current!.addSourceBuffer("audio/mpeg");
           const reader = readableStream.getReader();
 
-          // This value may need adjustment based on your specific requirements
-          const BUFFER_THRESHOLD = 100000; // ~100KB before starting playback
+          // Increase buffer threshold for smoother playback
+          const BUFFER_THRESHOLD = 200000; // ~200KB before starting playback
           let initialBufferFilled = false;
           let accumulatedSize = 0;
+
+          // Add event listener for when playback is about to starve
+          audio.addEventListener('waiting', () => {
+            console.log('Audio playback buffering...');
+          });
 
           const pump = async () => {
             try {
               const { done, value } = await reader.read();
 
               if (done) {
-                // End of stream
-                if (!sourceBuffer.updating) {
-                  mediaSourceRef.current?.endOfStream();
-                } else {
-                  sourceBuffer.addEventListener("updateend", () => {
-                    mediaSourceRef.current?.endOfStream();
-                  }, { once: true });
+                // Check if mediaSourceRef is still valid and in open state
+                if (mediaSourceRef.current && mediaSourceRef.current.readyState === 'open') {
+                  if (!sourceBuffer.updating) {
+                    mediaSourceRef.current.endOfStream();
+                  } else {
+                    sourceBuffer.addEventListener("updateend", () => {
+                      if (mediaSourceRef.current && mediaSourceRef.current.readyState === 'open') {
+                        mediaSourceRef.current.endOfStream();
+                      }
+                    }, { once: true });
+                  }
                 }
 
                 // Wait for audio to finish playing
@@ -277,6 +293,11 @@ export function ConvAI() {
                 }, { once: true });
 
                 return;
+              }
+
+              // Check if MediaSource is still valid
+              if (!mediaSourceRef.current || mediaSourceRef.current.readyState !== 'open') {
+                throw new Error("MediaSource is no longer valid");
               }
 
               // Wait if the buffer is updating
@@ -294,14 +315,19 @@ export function ConvAI() {
               // Start playback once we have enough data
               if (!initialBufferFilled && accumulatedSize >= BUFFER_THRESHOLD) {
                 initialBufferFilled = true;
-                audio.play().catch(e => {
-                  console.error("Failed to start audio playback:", e);
-                  reject(e);
-                });
+                // Add a short delay before playing to ensure buffer is processed
+                setTimeout(() => {
+                  audio.play().catch(e => {
+                    console.error("Failed to start audio playback:", e);
+                    reject(e);
+                  });
+                }, 100);
               }
 
               // Continue pumping
-              pump();
+              sourceBuffer.addEventListener("updateend", () => {
+                pump();
+              }, { once: true });
             } catch (error) {
               console.error("Error while pumping audio data:", error);
               reject(error);
@@ -329,9 +355,13 @@ export function ConvAI() {
     } finally {
       setIsSpeaking(false);
       if (mediaSourceRef.current) {
-        // Only end the stream if it hasn't already ended
-        if (mediaSourceRef.current.readyState !== 'ended') {
-          mediaSourceRef.current.endOfStream();
+        // Only end the stream if it's in the open state
+        if (mediaSourceRef.current.readyState === 'open') {
+          try {
+            mediaSourceRef.current.endOfStream();
+          } catch (e) {
+            console.warn("Could not end media stream:", e);
+          }
         }
         mediaSourceRef.current = null;
       }
