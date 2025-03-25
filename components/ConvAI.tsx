@@ -26,7 +26,6 @@ export function ConvAI() {
   const [isRecording, setIsRecording] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [chatId, setChatId] = useState("");
-  const [fileBlob, setFileBlob] = useState<Blob | null>(null);
   let transcribedText = "";
   let kodeusReply = "";
   const [audioURL, setAudioURL] = useState<string>("");
@@ -36,7 +35,6 @@ export function ConvAI() {
   async function switchSpeak() {
     if (!isRecording) {
       // Reset previous state explicitly before starting a new recording
-      setFileBlob(null);
       setAudioURL("");
       transcribedText = "";
       kodeusReply = "";
@@ -106,12 +104,6 @@ export function ConvAI() {
             type: "audio/webm",
           });
 
-          // Use functional update to ensure we're working with the latest state
-          setFileBlob((currentBlob) => {
-            console.log("New blob created:", audioBlob.size);
-            return audioBlob;
-          });
-
           const url = URL.createObjectURL(audioBlob);
           setAudioURL((currentURL) => {
             // Revoke previous URL to prevent memory leaks
@@ -130,7 +122,7 @@ export function ConvAI() {
   }
 
   async function stopRecording() {
-    return new Promise((resolve) => {
+    return new Promise((resolve: (value: Blob | null) => void) => {
       if (mediaRecorderRef.current) {
         // Set up a one-time event handler for the stop event
         mediaRecorderRef.current.addEventListener(
@@ -140,9 +132,6 @@ export function ConvAI() {
               const audioBlob = new Blob(audioChunksRef.current, {
                 type: "audio/webm",
               });
-
-              // Still update the state for other parts of the app
-              setFileBlob(audioBlob);
 
               const url = URL.createObjectURL(audioBlob);
               setAudioURL((currentURL) => {
@@ -171,7 +160,7 @@ export function ConvAI() {
   }
 
   // Create a new function to transcribe a specific blob
-  async function transcribeBlob(blob) {
+  async function transcribeBlob(blob: Blob | null) {
     if (!blob) {
       console.error("No audio blob available for transcription");
       return;
@@ -183,18 +172,6 @@ export function ConvAI() {
     });
     transcribedText = transcription.text;
     console.log(transcription);
-  }
-
-  // Keep the original transcribe function for backward compatibility
-  async function transcribe() {
-    // Create a local blob from audioChunksRef if fileBlob is null
-    const blobToTranscribe =
-      fileBlob ||
-      (audioChunksRef.current.length > 0
-        ? new Blob(audioChunksRef.current, { type: "audio/webm" })
-        : null);
-
-    await transcribeBlob(blobToTranscribe);
   }
 
   async function processConversation() {
@@ -264,9 +241,9 @@ export function ConvAI() {
   }
 
   // Modified to accept a direct URL parameter
-  async function Speak(directUrl = null) {
+  async function Speak(directUrl: string) {
     setIsSpeaking(true);
-    let audio = null;
+    let audio: HTMLAudioElement | null = null;
 
     try {
       // Use the passed URL if available, otherwise fall back to state
@@ -282,14 +259,13 @@ export function ConvAI() {
       audio = new Audio();
 
       // Create a promise for audio playback
-      await new Promise((resolve, reject) => {
+      await new Promise<void>((resolve, reject) => {
         let hasError = false;
 
         // Safety timeout in case events don't fire
         const timeout = setTimeout(() => {
           if (!hasError) {
             console.warn("Audio playback timeout - resolving anyway");
-            resolve();
           }
         }, 1000000); // 10 second timeout
 
@@ -300,12 +276,16 @@ export function ConvAI() {
           resolve();
         };
 
-        const handleError = (err) => {
+        const handleError = (err: unknown) => {
           hasError = true;
           clearTimeout(timeout);
           // console.error("Audio error:", err, audio.error);
           reject(err);
         };
+
+        if (!audio) {
+          return;
+        }
 
         // Attach event listeners - using addEventListener for better control
         audio.addEventListener("ended", handlePlaybackEnd, { once: true });
@@ -315,6 +295,9 @@ export function ConvAI() {
         audio.addEventListener(
           "canplaythrough",
           () => {
+            if(!audio){
+              return
+            }
             console.log("Audio can play through, starting playback");
             audio.play().catch(handleError);
           },
