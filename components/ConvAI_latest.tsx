@@ -18,8 +18,48 @@ async function streamToBuffer(stream: internal.Readable): Promise<Buffer> {
 }
 
 const client = new ElevenLabsClient({
-  apiKey: "sk_4e7026128a2ef3d7719fdc1168e77718c6120e66189a5573",
+  apiKey: "sk_90274c6fe5c20df269347ec14978da39228e893a6e9a279b",
 });
+
+// Advanced Audio Playback with Additional Controls
+class AudioPlayer {
+  constructor(audioUrl) {
+    this.audio = new Audio(audioUrl);
+
+    // Event listeners for various audio states
+    this.audio.addEventListener("loadedmetadata", () => {
+      console.log("Audio metadata loaded");
+      console.log("Duration:", this.audio.duration);
+    });
+
+    this.audio.addEventListener("ended", () => {
+      console.log("Audio playback finished");
+    });
+  }
+
+  play() {
+    return this.audio.play();
+  }
+
+  pause() {
+    this.audio.pause();
+  }
+
+  stop() {
+    this.audio.pause();
+    this.audio.currentTime = 0;
+  }
+
+  setVolume(volume) {
+    // Volume ranges from 0 to 1
+    this.audio.volume = Math.max(0, Math.min(1, volume));
+  }
+
+  seek(time) {
+    // Seek to a specific time in the audio
+    this.audio.currentTime = time;
+  }
+}
 
 export function ConvAI() {
   const [isConnected, setIsConnected] = useState(false);
@@ -33,41 +73,56 @@ export function ConvAI() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
+  // async function switchSpeak() {
+  // if (!isRecording) {
+  // setIsRecording(!isRecording);
+  // await startRecording();
+  // console.log(chatId);
+  // console.log("1");
+  // } else {
+  // setIsRecording(!isRecording);
+  // await stopRecording();
+  // console.log(fileBlob?.arrayBuffer.length);
+  // console.log("2");
+  // await transcribe();
+  // console.log(transcribedText);
+  // console.log("3");
+  // await processConversation();
+  // console.log(kodeusReply);
+  // console.log("4");
+  // await Speak();
+  // console.log("5");
+  // console.log();
+  // }
+  // return;
+  // }
+
   async function switchSpeak() {
     if (!isRecording) {
       // Reset previous state explicitly before starting a new recording
       setFileBlob(null);
       setAudioURL("");
       transcribedText = "";
-      kodeusReply = "";
 
       setIsRecording(true);
       await startRecording();
     } else {
       setIsRecording(false);
-      try {
-        const recordedBlob = await stopRecording();
+      const recordedBlob = await stopRecording();
 
-        if (!recordedBlob) {
-          throw new Error("No audio recorded");
-        }
-
+      if (recordedBlob) {
         await transcribeBlob(recordedBlob);
+        const newAudioURL = await processConversation();
 
-        if (!transcribedText) {
-          throw new Error("Transcription produced no text");
+        // Make sure we're using the most current audio URL
+        if (newAudioURL) {
+          setAudioURL(newAudioURL);
+          await Speak();
+        } else {
+          console.error("No audio URL generated");
         }
-
-        const url = await processConversation();
-
-        if (!url) {
-          throw new Error("Failed to get audio URL");
-        }
-
-        // Pass the URL directly to Speak
-        await Speak(url);
-      } catch (error) {
-        console.error("Error in speech processing flow:", error);
+      } else {
+        console.error("No audio blob captured");
       }
     }
   }
@@ -198,143 +253,83 @@ export function ConvAI() {
   }
 
   async function processConversation() {
-    try {
-      const response = await fetch(
-        "https://yesthisoneforfree.zapto.org/message",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            text: transcribedText,
-            context: chatId,
-            message_id: "",
-          }),
-        }
-      );
-
-      const resp = await response.json();
-      kodeusReply = resp.message;
-
-      if (!kodeusReply) {
-        console.error("Empty response from conversation API");
-        return null;
+    const response = await fetch(
+      "https://yesthisoneforfree.zapto.org/message",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: transcribedText,
+          context: chatId,
+          message_id: "",
+        }),
       }
+    );
 
-      console.log("Generating audio for text:", kodeusReply);
+    const resp = await response.json();
+    kodeusReply = resp.message;
 
-      try {
-        const audio = await client.textToSpeech.convert(
-          "JBFqnCBsd6RMkjVDRZzb",
-          {
-            text: kodeusReply,
-            model_id: "eleven_multilingual_v2",
-            output_format: "mp3_44100_128",
-          }
-        );
+    const audio = await client.textToSpeech.convert("JBFqnCBsd6RMkjVDRZzb", {
+      // Sarah: EXAVITQu4vr4xnSDxMaL
+      text: kodeusReply,
 
-        const audioBuffer = await streamToBuffer(audio);
-        const audioBlob = new Blob([audioBuffer], { type: "audio/mpeg" });
+      model_id: "eleven_multilingual_v2",
 
-        // Clear previous audio URL
-        if (audioURL) {
-          try {
-            URL.revokeObjectURL(audioURL);
-          } catch (e) {
-            console.warn("Failed to revoke URL:", e);
-          }
-        }
+      output_format: "mp3_44100_128",
+    });
 
-        const url = URL.createObjectURL(audioBlob);
-        console.log("Created audio URL:", url);
+    const audioBuffer = await streamToBuffer(audio);
+    const audioBlob = new Blob([audioBuffer], { type: "audio/mp3" });
 
-        // Update state first
-        setAudioURL(url);
-
-        return url;
-      } catch (audioError) {
-        console.error("Error generating audio:", audioError);
-        return null;
-      }
-    } catch (error) {
-      console.error("Error in conversation processing:", error);
-      return null;
+    // Revoke any existing object URL to prevent memory leaks
+    if (audioURL) {
+      URL.revokeObjectURL(audioURL);
     }
+
+    const url = URL.createObjectURL(audioBlob);
+    setAudioURL(url);
+
+    // Return the URL to ensure it's immediately available
+    return url;
   }
 
-  // Modified to accept a direct URL parameter
-  async function Speak(directUrl = null) {
+  async function Speak() {
     setIsSpeaking(true);
-    let audio = null;
-
     try {
-      // Use the passed URL if available, otherwise fall back to state
-      const urlToPlay = directUrl || audioURL;
+      // Use the latest audioURL from state or the one passed directly
+      const audio = new Audio(audioURL);
 
-      if (!urlToPlay) {
-        throw new Error("No audio URL available");
-      }
-
-      console.log("Attempting to play:", urlToPlay);
-
-      // Create audio element and set properties
-      audio = new Audio();
-
-      // Create a promise for audio playback
+      // Return a promise that resolves when the audio has finished playing
       await new Promise((resolve, reject) => {
-        let hasError = false;
+        audio.onended = resolve;
+        audio.onerror = (e) => {
+          console.error("Audio playback error:", e);
+          reject(e);
+        };
 
-        // Safety timeout in case events don't fire
-        const timeout = setTimeout(() => {
-          if (!hasError) {
-            console.warn("Audio playback timeout - resolving anyway");
-            resolve();
+        // Ensure audio is loaded before attempting to play
+        audio.oncanplaythrough = () => {
+          const playPromise = audio.play();
+          if (playPromise !== undefined) {
+            playPromise.catch((error) => {
+              console.error("Play failed:", error);
+              reject(error);
+            });
           }
-        }, 1000000); // 10 second timeout
-
-        // Set up event handlers
-        const handlePlaybackEnd = () => {
-          console.log("Audio playback ended");
-          clearTimeout(timeout);
-          resolve();
         };
 
-        const handleError = (err) => {
-          hasError = true;
-          clearTimeout(timeout);
-          // console.error("Audio error:", err, audio.error);
-          reject(err);
+        // Handle the case where the audio fails to load
+        audio.onerror = (e) => {
+          console.error("Failed to load audio:", e);
+          reject(e);
         };
-
-        // Attach event listeners - using addEventListener for better control
-        audio.addEventListener("ended", handlePlaybackEnd, { once: true });
-        audio.addEventListener("error", handleError, { once: true });
-
-        // Add load success handler
-        audio.addEventListener(
-          "canplaythrough",
-          () => {
-            console.log("Audio can play through, starting playback");
-            audio.play().catch(handleError);
-          },
-          { once: true }
-        );
-
-        // Set source and load
-        audio.src = urlToPlay;
-        audio.load();
       });
     } catch (error) {
-      console.error("Speak function error:", error);
+      console.error("Error during audio playback:", error);
     } finally {
       setIsSpeaking(false);
-
-      // Clean up any remaining audio
-      if (audio) {
-        audio.pause();
-        audio.src = "";
-      }
     }
   }
 
@@ -377,26 +372,26 @@ export function ConvAI() {
               onClick={switchSpeak}
             >
               {/* <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
-                <path
-                  fill="#FF156D"
-                  stroke="#FF156D"
-                  stroke-width="15"
-                  transform-origin="center"
-                  d="m148 84.7 13.8-8-10-17.3-13.8 8a50 50 0 0 0-27.4-15.9v-16h-20v16A50 50 0 0 0 63 67.4l-13.8-8-10 17.3 13.8 8a50 50 0 0 0 0 31.7l-13.8 8 10 17.3 13.8-8a50 50 0 0 0 27.5 15.9v16h20v-16a50 50 0 0 0 27.4-15.9l13.8 8 10-17.3-13.8-8a50 50 0 0 0 0-31.7Zm-47.5 50.8a35 35 0 1 1 0-70 35 35 0 0 1 0 70Z"
-                >
-                  <animateTransform
-                    type="rotate"
-                    attributeName="transform"
-                    calcMode="spline"
-                    dur="1.8"
-                    values="0;120"
-                    keyTimes="0;1"
-                    keySplines="0 0 1 1"
-                    repeatCount="indefinite"
-                  ></animateTransform>
-                </path>
-              </svg>
-               */}
+ <path
+ fill="#FF156D"
+ stroke="#FF156D"
+ stroke-width="15"
+ transform-origin="center"
+ d="m148 84.7 13.8-8-10-17.3-13.8 8a50 50 0 0 0-27.4-15.9v-16h-20v16A50 50 0 0 0 63 67.4l-13.8-8-10 17.3 13.8 8a50 50 0 0 0 0 31.7l-13.8 8 10 17.3 13.8-8a50 50 0 0 0 27.5 15.9v16h20v-16a50 50 0 0 0 27.4-15.9l13.8 8 10-17.3-13.8-8a50 50 0 0 0 0-31.7Zm-47.5 50.8a35 35 0 1 1 0-70 35 35 0 0 1 0 70Z"
+ >
+ <animateTransform
+ type="rotate"
+ attributeName="transform"
+ calcMode="spline"
+ dur="1.8"
+ values="0;120"
+ keyTimes="0;1"
+ keySplines="0 0 1 1"
+ repeatCount="indefinite"
+ ></animateTransform>
+ </path>
+ </svg>
+ */}
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 width="24"
