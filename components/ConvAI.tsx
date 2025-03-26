@@ -29,6 +29,9 @@ export function ConvAI() {
   const mediaSourceRef = useRef<MediaSource | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
+  // Add a simple request counter to track the latest request
+  const requestIdRef = useRef<number>(0);
+
   // Function to stop any currently playing audio
   const stopCurrentAudio = () => {
     // First, stop playback
@@ -83,8 +86,16 @@ export function ConvAI() {
       await startRecording();
     } else {
       setIsRecording(false);
+
+      // Increment request ID for this new request
+      requestIdRef.current++;
+      const currentRequestId = requestIdRef.current;
+
       try {
         const recordedBlob = await stopRecording();
+
+        // Skip if another request has started
+        if (currentRequestId !== requestIdRef.current) return;
 
         if (!recordedBlob) {
           throw new Error("No audio recorded");
@@ -92,11 +103,17 @@ export function ConvAI() {
 
         await transcribeBlob(recordedBlob);
 
+        // Skip if another request has started
+        if (currentRequestId !== requestIdRef.current) return;
+
         if (!transcribedText) {
           throw new Error("No transcription text");
         }
 
         const streamData = await processConversation();
+
+        // Skip if another request has started
+        if (currentRequestId !== requestIdRef.current) return;
 
         if (!streamData) {
           throw new Error("Failed to get audio stream");
@@ -222,6 +239,9 @@ export function ConvAI() {
     // Stop any currently playing audio before starting a new one
     stopCurrentAudio();
 
+    // Store the current request ID for this processing session
+    const currentRequestId = requestIdRef.current;
+
     try {
       const response = await fetch(
         "https://yesthisoneforfree.zapto.org/message",
@@ -237,6 +257,12 @@ export function ConvAI() {
           }),
         }
       );
+
+      // Check if this is still the current request
+      if (currentRequestId !== requestIdRef.current) {
+        console.log("Request superseded by newer request");
+        return null;
+      }
 
       const resp = await response.json();
       kodeusReply = resp.message;
@@ -266,6 +292,12 @@ export function ConvAI() {
         }
       );
 
+      // Check if this is still the current request
+      if (currentRequestId !== requestIdRef.current) {
+        console.log("TTS request superseded by newer request");
+        return null;
+      }
+
       if (!ttsResponse.ok || !ttsResponse.body) {
         throw new Error("Failed to stream audio");
       }
@@ -284,17 +316,16 @@ export function ConvAI() {
       // Return both the URL and the streaming setup promise
       return {
         url: audioUrl,
-        setupPromise: setupStreamingAudio(ttsResponse.body, audio)
+        setupPromise: setupStreamingAudio(ttsResponse.body, audio, currentRequestId)
       };
-
     } catch (error) {
       console.error("Error in conversation processing:", error);
       return null;
     }
   }
 
-  // New function to set up streaming audio
-  async function setupStreamingAudio(readableStream: ReadableStream, audio: HTMLAudioElement) {
+  // Update setupStreamingAudio to check the request ID
+  async function setupStreamingAudio(readableStream: ReadableStream, audio: HTMLAudioElement, requestId: number) {
     return new Promise<void>((resolve, reject) => {
       if (!mediaSourceRef.current) {
         reject(new Error("MediaSource not initialized"));
@@ -305,8 +336,18 @@ export function ConvAI() {
 
       mediaSourceRef.current.addEventListener("sourceopen", async () => {
         try {
+          // Check if this is still the current request
+          if (requestId !== requestIdRef.current) {
+            resolve(); // Resolve without error since it's just outdated
+            return;
+          }
+
           // Set duration only after MediaSource is open
-          mediaSourceRef.current!.duration = 100;
+          if (mediaSourceRef.current && mediaSourceRef.current.readyState === 'open') {
+            mediaSourceRef.current.duration = 100;
+          } else {
+            throw new Error("MediaSource is not open");
+          }
 
           const sourceBuffer = mediaSourceRef.current!.addSourceBuffer("audio/mpeg");
           const reader = readableStream.getReader();
@@ -323,17 +364,33 @@ export function ConvAI() {
 
           const pump = async () => {
             try {
+              // Check if this is still the current request
+              if (requestId !== requestIdRef.current) {
+                console.log("Pump aborted - newer request exists");
+                return;
+              }
+
               const { done, value } = await reader.read();
 
               if (done) {
                 // Check if mediaSourceRef is still valid and in open state
-                if (mediaSourceRef.current && mediaSourceRef.current.readyState === 'open') {
+                if (mediaSourceRef.current && mediaSourceRef.current.readyState === 'open' &&
+                  requestId === requestIdRef.current) {
                   if (!sourceBuffer.updating) {
-                    mediaSourceRef.current.endOfStream();
+                    try {
+                      mediaSourceRef.current.endOfStream();
+                    } catch (e) {
+                      console.warn("Could not end media stream:", e);
+                    }
                   } else {
                     sourceBuffer.addEventListener("updateend", () => {
-                      if (mediaSourceRef.current && mediaSourceRef.current.readyState === 'open') {
-                        mediaSourceRef.current.endOfStream();
+                      if (mediaSourceRef.current && mediaSourceRef.current.readyState === 'open' &&
+                        requestId === requestIdRef.current) {
+                        try {
+                          mediaSourceRef.current.endOfStream();
+                        } catch (e) {
+                          console.warn("Could not end media stream:", e);
+                        }
                       }
                     }, { once: true });
                   }
@@ -348,19 +405,29 @@ export function ConvAI() {
                 return;
               }
 
-              // Check if MediaSource is still valid
-              if (!mediaSourceRef.current || mediaSourceRef.current.readyState !== 'open') {
-                throw new Error("MediaSource is no longer valid");
+              // Check if MediaSource is still valid and this is still the current request
+              if (!mediaSourceRef.current || mediaSourceRef.current.readyState !== 'open' ||
+                requestId !== requestIdRef.current) {
+                return; // Just return without error if superseded
               }
 
               // Wait if the buffer is updating
               if (sourceBuffer.updating) {
-                sourceBuffer.addEventListener("updateend", () => pump(), { once: true });
+                sourceBuffer.addEventListener("updateend", () => {
+                  if (requestId === requestIdRef.current) pump();
+                }, { once: true });
                 return;
               }
 
               // Append the new chunk
-              sourceBuffer.appendBuffer(value);
+              try {
+                sourceBuffer.appendBuffer(value);
+              } catch (e) {
+                if (requestId !== requestIdRef.current) {
+                  return;
+                }
+                throw e;
+              }
 
               // Track accumulated buffer size
               accumulatedSize += value.length;
@@ -370,28 +437,34 @@ export function ConvAI() {
                 initialBufferFilled = true;
                 // Add a short delay before playing to ensure buffer is processed
                 setTimeout(() => {
-                  audio.play().catch(e => {
-                    console.error("Failed to start audio playback:", e);
-                    reject(e);
-                  });
+                  if (requestId === requestIdRef.current) {
+                    audio.play().catch(e => {
+                      console.error("Failed to start audio playback:", e);
+                      reject(e);
+                    });
+                  }
                 }, 100);
               }
 
               // Continue pumping
               sourceBuffer.addEventListener("updateend", () => {
-                pump();
+                if (requestId === requestIdRef.current) pump();
               }, { once: true });
             } catch (error) {
-              console.error("Error while pumping audio data:", error);
-              reject(error);
+              if (requestId === requestIdRef.current) {
+                console.error("Error while pumping audio data:", error);
+                reject(error);
+              }
             }
           };
 
           // Start the pumping process
           pump();
         } catch (error) {
-          console.error("Error setting up media source:", error);
-          reject(error);
+          if (requestId === requestIdRef.current) {
+            console.error("Error setting up media source:", error);
+            reject(error);
+          }
         }
       });
     });
