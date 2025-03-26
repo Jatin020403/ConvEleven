@@ -27,9 +27,53 @@ export function ConvAI() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const mediaSourceRef = useRef<MediaSource | null>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Function to stop any currently playing audio
+  const stopCurrentAudio = () => {
+    // First, stop playback
+    if (currentAudioRef.current) {
+      // Pause the audio first
+      currentAudioRef.current.pause();
+
+      // Remove the src attribute before revoking URL to prevent errors
+      currentAudioRef.current.removeAttribute('src');
+      currentAudioRef.current.srcObject = null;
+
+      // Force release of audio resources
+      currentAudioRef.current.load();
+      currentAudioRef.current = null;
+    }
+
+    // Then handle the MediaSource
+    if (mediaSourceRef.current) {
+      if (mediaSourceRef.current.readyState === 'open') {
+        try {
+          mediaSourceRef.current.endOfStream();
+        } catch (e) {
+          console.warn("Could not end media stream:", e);
+        }
+      }
+      mediaSourceRef.current = null;
+    }
+
+    // After disconnecting the audio element, it's safe to revoke the URL
+    if (audioURL) {
+      // Add a small delay before revoking to ensure any pending operations complete
+      setTimeout(() => {
+        URL.revokeObjectURL(audioURL);
+      }, 100);
+      setAudioURL("");
+    }
+
+    setIsSpeaking(false);
+  };
 
   async function switchSpeak() {
     if (!isRecording) {
+      // Stop any current audio before starting a new recording
+      stopCurrentAudio();
+
       // Reset previous state explicitly before starting a new recording
       setAudioURL("");
       transcribedText = "";
@@ -73,6 +117,9 @@ export function ConvAI() {
   }
 
   async function endConversation() {
+    // Stop any playing audio when ending the conversation
+    stopCurrentAudio();
+
     setIsConnected(false);
     setIsRecording(false);
     transcribedText = "";
@@ -172,6 +219,9 @@ export function ConvAI() {
   }
 
   async function processConversation() {
+    // Stop any currently playing audio before starting a new one
+    stopCurrentAudio();
+
     try {
       const response = await fetch(
         "https://yesthisoneforfree.zapto.org/message",
@@ -227,6 +277,9 @@ export function ConvAI() {
       // Create audio element here to start playing as soon as data is available
       const audio = new Audio(audioUrl);
       audio.autoplay = true;
+
+      // Store reference to the current audio element
+      currentAudioRef.current = audio;
 
       // Return both the URL and the streaming setup promise
       return {
@@ -354,6 +407,9 @@ export function ConvAI() {
       console.error("Playback error:", error);
     } finally {
       setIsSpeaking(false);
+      // Clear the current audio reference
+      currentAudioRef.current = null;
+
       if (mediaSourceRef.current) {
         // Only end the stream if it's in the open state
         if (mediaSourceRef.current.readyState === 'open') {
