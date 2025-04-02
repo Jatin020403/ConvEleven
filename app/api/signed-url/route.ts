@@ -1,8 +1,8 @@
 import {NextResponse} from "next/server";
 
 export async function GET() {
-    const agentId = process.env.AGENT_ID
-    const apiKey = process.env.XI_API_KEY
+    const agentId = process.env.NEXT_PUBLIC_AGENT_ID;
+    const apiKey = process.env.NEXT_PUBLIC_XI_API_KEY;
     if (!agentId) {
         throw Error('AGENT_ID is not set')
     }
@@ -25,7 +25,7 @@ export async function GET() {
         }
 
         const data = await response.json();
-        return NextResponse.json({signedUrl: data.signed_url})
+        return NextResponse.json({ signedUrl: data.signed_url })
     } catch (error) {
         console.error('Error:', error);
         return NextResponse.json({ error: 'Failed to get signed URL' }, { status: 500 });
